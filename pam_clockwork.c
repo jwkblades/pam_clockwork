@@ -24,20 +24,20 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+#include <ctype.h>
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pwd.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
-#include <ctype.h>
-#include <syslog.h>
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <syslog.h>
 #include <time.h>
-#include <dlfcn.h>
+#include <unistd.h>
 
 /* The following defined must be present _before_ pam is included, according to its documentation. */
 #define PAM_SM_AUTH
@@ -50,7 +50,7 @@
 
 #define UNUSED __attribute__((unused))
 
-#define VERSION "0.1"
+#define VERSION "0.2"
 #define TEMPORARY_PATH "/tmp/"
 #define CACHEFILE_SUFFIX ".clockwork"
 #define MODULE_LOCATION "/lib/security/"
@@ -66,6 +66,10 @@ struct clockworkConfig
     int             subArgc;
     const char**    subArgv;
     FILE*           debugFile;
+    FILE*           cacheFile;
+    char*           callingUser;
+    const char*     destinationUser;
+    char*           effectiveUser;
 };
 
 #ifdef DEBUG
@@ -80,8 +84,7 @@ if (cfg->debug)                             \
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
-static void
-parseConfig(int flags, int argc, const char** argv, struct clockworkConfig* cfg)
+static void parseConfig(int flags, int argc, const char** argv, struct clockworkConfig* cfg)
 {
     int i = 0;
 
@@ -170,6 +173,68 @@ parseConfig(int flags, int argc, const char** argv, struct clockworkConfig* cfg)
     {
         DEBUG("    argv[%d]=%s", i, cfg->subArgv[i]);
     }
+}
+
+int usernameFromUid(struct passwd* userInfo, char** destination)
+{
+    if (!userInfo)
+    {
+        return PAM_CONV_ERR;
+    }
+
+    if (*destination)
+    {
+        free(*destination);
+        (*destination) = NULL;
+    }
+
+    int retval = PAM_SUCCESS;
+    int usernameLen = strlen(userInfo->pw_name);
+
+    (*destination) = (char*) malloc(usernameLen + 1);
+
+    if (destination)
+    {
+        strncpy(*destination, userInfo->pw_name, usernameLen);
+        (*destination)[usernameLen] = '\0';
+    }
+    else
+    {
+        retval = PAM_CONV_ERR;
+    }
+
+    return retval;
+}
+
+int getUsernames(pam_handle_t* pamHandle, struct clockworkConfig* cfg)
+{
+    int retval = pam_get_user(pamHandle, &cfg->destinationUser, NULL);
+    if (retval != PAM_SUCCESS)
+    {
+        return retval;
+    }
+    DEBUG("Destination user: %s", cfg->destinationUser);
+
+    uid_t callingUID = getuid();
+    uid_t effectiveUID = geteuid();
+
+    struct passwd* userInfo = getpwuid(callingUID);
+    retval = usernameFromUid(userInfo, &cfg->callingUser);
+    if (retval != PAM_SUCCESS)
+    {
+        return retval;
+    }
+    DEBUG("Calling user: %s", cfg->callingUser);
+
+    userInfo = getpwuid(effectiveUID);
+    retval = usernameFromUid(userInfo, &cfg->effectiveUser);
+    if (retval != PAM_SUCCESS)
+    {
+        return retval;
+    }
+
+    DEBUG("Effective user: %s", cfg->effectiveUser);
+    return retval;
 }
 
 void* isModuleLoaded(struct clockworkConfig* cfg, const char* modulePathAndName)
@@ -267,6 +332,21 @@ int finalize(pam_handle_t* pamHandle, struct clockworkConfig* cfg, char* moduleP
     if (cfg->debugFile != stderr && cfg->debugFile != stdout)
     {
         fclose(cfg->debugFile);
+    }
+
+    if (cfg->cacheFile)
+    {
+        fclose(cfg->cacheFile);
+    }
+
+    if (cfg->callingUser)
+    {
+        free(cfg->callingUser);
+    }
+
+    if (cfg->effectiveUser)
+    {
+        free(cfg->effectiveUser);
     }
 
     return retval;
@@ -381,27 +461,24 @@ PAM_EXTERN
 int pam_sm_authenticate(pam_handle_t* pamHandle, int flags, int argc, const char** argv)
 {
     int retval;
-    const char* user = NULL;
     struct clockworkConfig cfgInstance;
     struct clockworkConfig* cfg = &cfgInstance;
     void* module = NULL;
     char* modulePathAndName = NULL;
     int (*moduleAuthFunc)(pam_handle_t*, int, int, const char**);
 
-
     parseConfig(flags, argc, argv, cfg);
 
     DEBUG("pam_clockwork version: %s", VERSION);
 
-    retval = pam_get_user(pamHandle, &user, NULL);
+    retval = getUsernames(pamHandle, cfg);
     if (retval != PAM_SUCCESS)
     {
         DEBUG("Get user returned error: %s", pam_strerror(pamHandle, retval));
         return finalize(pamHandle, cfg, modulePathAndName, module, retval);
     }
 
-    // FIXME - Need to check tmp file to determine if authorization for submodule has already passed (recently).
-    retval = cachedAuth(cfg, user, cfg->subModule);
+    retval = cachedAuth(cfg, cfg->callingUser, cfg->subModule);
     if (retval == PAM_SUCCESS || retval == PAM_MAXTRIES)
     {
         DEBUG("Authentication cached.");
@@ -433,17 +510,8 @@ int pam_sm_authenticate(pam_handle_t* pamHandle, int flags, int argc, const char
 
     if (retval == PAM_SUCCESS || retval == PAM_MAXTRIES)
     {
-        cacheResult(cfg, user, cfg->subModule, retval);
+        cacheResult(cfg, cfg->callingUser, cfg->subModule, retval);
     }
-
-    // if (!alreadyPassedAuth)
-    // {
-        // FIXME - Need to load shared module.
-        // FIXME - Need to forward information to submodule.
-    // }
-    // FIXME - Need to 
-
-    retval = PAM_SUCCESS;
 
     return finalize(pamHandle, cfg, modulePathAndName, module, retval);
 }
