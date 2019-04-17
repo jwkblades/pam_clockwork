@@ -84,6 +84,15 @@ if (cfg->debug)                             \
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
+static int doStringsMatch(const char* a, const char* b)
+{
+    int lengthA = strlen(a);
+    int lengthB = strlen(b);
+    
+    return lengthA >= lengthB &&
+        strncmp(a, b, MIN(lengthA, lengthB)) == 0;
+}
+
 static void parseConfig(int flags, int argc, const char** argv, struct clockworkConfig* cfg)
 {
     int i = 0;
@@ -94,26 +103,26 @@ static void parseConfig(int flags, int argc, const char** argv, struct clockwork
 
     for(; i < argc; ++i)
     {
-        if (strncmp(argv[i], "debug", 5) == 0)
+        if (doStringsMatch(argv[i], "debug"))
         {
             cfg->debug = 1;
         }
-        else if (strncmp(argv[i], "alwaysok", 8) == 0)
+        else if (doStringsMatch(argv[i], "alwaysok"))
         {
             cfg->alwaysOk = 1;
         }
-        else if (strncmp(argv[i], "timeout=", 8) == 0)
+        else if (doStringsMatch(argv[i], "timeout="))
         {
             sscanf(argv[i], "timeout=%d", &cfg->timeoutSeconds);
         }
-        else if (strncmp(argv[i], "debug_file=", 11) == 0)
+        else if (doStringsMatch(argv[i], "debug_file="))
         {
             const char* filename = argv[i] + 11;
-            if (strncmp(filename, "stdout", 6) == 0)
+            if (doStringsMatch(filename, "stdout"))
             {
                 cfg->debugFile = stdout;
             }
-            else if (strncmp(filename, "stderr", 6) == 0)
+            else if (doStringsMatch(filename, "stderr"))
             {
                 cfg->debugFile = stderr;
             }
@@ -143,7 +152,7 @@ static void parseConfig(int flags, int argc, const char** argv, struct clockwork
                 }
             }
         }
-        else if (strncmp(argv[i], "--", 2) == 0)
+        else if (doStringsMatch(argv[i], "--"))
         {
             if (i + 1 < argc)
             {
