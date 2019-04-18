@@ -422,7 +422,7 @@ int cachedAuth(struct clockworkConfig* cfg, const char* user, const char* module
     while ((read = getline(&line, &len, file)) != -1)
     {
         DEBUG("Read line '%s'", line);
-        if (doStringsMatch(line, module))
+        if (isPrefixedBy(line, module))
         {
             const char* lineParts[] = {module, ",%d,%d"};
             char* expectedLine = stringConcat(2, lineParts);
