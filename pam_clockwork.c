@@ -88,7 +88,16 @@ static int doStringsMatch(const char* a, const char* b)
 {
     int lengthA = strlen(a);
     int lengthB = strlen(b);
-    
+
+    return lengthA == lengthB &&
+        strncmp(a, b, lengthA) == 0;
+}
+
+static int isPrefixedBy(const char* a, const char* b)
+{
+    int lengthA = strlen(a);
+    int lengthB = strlen(b);
+
     return lengthA >= lengthB &&
         strncmp(a, b, MIN(lengthA, lengthB)) == 0;
 }
@@ -111,11 +120,11 @@ static void parseConfig(int flags, int argc, const char** argv, struct clockwork
         {
             cfg->alwaysOk = 1;
         }
-        else if (doStringsMatch(argv[i], "timeout="))
+        else if (isPrefixedBy(argv[i], "timeout="))
         {
             sscanf(argv[i], "timeout=%d", &cfg->timeoutSeconds);
         }
-        else if (doStringsMatch(argv[i], "debug_file="))
+        else if (isPrefixedBy(argv[i], "debug_file="))
         {
             const char* filename = argv[i] + 11;
             if (doStringsMatch(filename, "stdout"))
@@ -377,7 +386,6 @@ int cachedAuth(struct clockworkConfig* cfg, const char* user, const char* module
     int retval = PAM_AUTHINFO_UNAVAIL;
 
     DEBUG("Searching cache file at %s for module %s; current time = %d", filename, module, timestamp);
-
     if (lstat(filename, &st) == 0)
     {
         if (S_ISREG(st.st_mode))
@@ -396,10 +404,15 @@ int cachedAuth(struct clockworkConfig* cfg, const char* user, const char* module
             }
         }
     }
+    else
+    {
+        free(filename);
+        return PAM_AUTHINFO_UNAVAIL;
+    }
     free(filename);
     filename = NULL;
 
-    if (!file)
+    if (file == NULL)
     {
         DEBUG("Cache file doesn't exist.");
         return PAM_AUTHINFO_UNAVAIL;
@@ -409,7 +422,7 @@ int cachedAuth(struct clockworkConfig* cfg, const char* user, const char* module
     while ((read = getline(&line, &len, file)) != -1)
     {
         DEBUG("Read line '%s'", line);
-        if (strncmp(line, module, MIN(strlen(line), strlen(module))) == 0)
+        if (doStringsMatch(line, module))
         {
             const char* lineParts[] = {module, ",%d,%d"};
             char* expectedLine = stringConcat(2, lineParts);
